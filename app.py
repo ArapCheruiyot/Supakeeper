@@ -5,68 +5,41 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 import numpy as np
-
+from PIL import Image
 from io import BytesIO
 
-#import tensorflow_hub as hub
+import tensorflow_hub as hub
 import time
 import base64
 import math
 
-#from embeddings import generate_embedding
-#from sklearn.metrics.pairwise import cosine_similarity
+from embeddings import generate_embedding
+from sklearn.metrics.pairwise import cosine_similarity
 import random 
 
-
 from datetime import datetime, timedelta
-
-
-
 import uuid
-
-# At the top of your app.py, add:
 import json
-
-# Or if you already have Flask, it might be:
-from flask import Flask, render_template, request, jsonify
-# Make sure json is available
- 
+import os
 
 # ======================================================
 # APP INIT
 # ======================================================
 app = Flask(__name__)
 
-
 # ======================================================
 # FIREBASE CONFIG
 # ======================================================
-import os
-import json
-import firebase_admin
-from firebase_admin import credentials, firestore
-
 if not firebase_admin._apps:
     firebase_key = os.environ.get("FIREBASE_KEY")
-
+    
     if not firebase_key:
         raise RuntimeError("FIREBASE_KEY environment variable not set")
-
+    
     cred = credentials.Certificate(json.loads(firebase_key))
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
-
-# ======================================================
-# LOAD MODEL
-# ======================================================
-"""
-print("[INIT] Loading TensorFlow Hub model...")
-model = hub.load(
-    "https://tfhub.dev/google/imagenet/mobilenet_v2_100_224/feature_vector/5"
-)
-print("[READY] Model loaded successfully.")
-"""
 
 # ======================================================
 # FULL SHOP CACHE (STRICTLY PER SHOP) - UPDATED WITH BATCH TRACKING
@@ -77,6 +50,10 @@ embedding_cache_full = {
     "total_shops": 0
 }
 
+# ======================================================
+# CACHE MANAGEMENT FUNCTIONS
+# ======================================================
+
 def refresh_full_item_cache():
     """REVISED: Includes ALL items with BATCH tracking and selling units with batch links"""
     start = time.time()
@@ -84,180 +61,202 @@ def refresh_full_item_cache():
 
     shops_result = []
 
-    for shop_doc in db.collection("Shops").stream():
-        shop_id = shop_doc.id
-        shop_data = shop_doc.to_dict()
+    try:
+        for shop_doc in db.collection("Shops").stream():
+            shop_id = shop_doc.id
+            shop_data = shop_doc.to_dict()
 
-        shop_entry = {
-            "shop_id": shop_id,
-            "shop_name": shop_data.get("name", ""),
-            "categories": []
-        }
-
-        for cat_doc in shop_doc.reference.collection("categories").stream():
-            cat_data = cat_doc.to_dict()
-            cat_id = cat_doc.id
-
-            category_entry = {
-                "category_id": cat_id,
-                "category_name": cat_data.get("name", ""),
-                "items": []
+            shop_entry = {
+                "shop_id": shop_id,
+                "shop_name": shop_data.get("name", ""),
+                "categories": []
             }
 
-            for item_doc in cat_doc.reference.collection("items").stream():
-                item_data = item_doc.to_dict()
-                item_id = item_doc.id
-                item_name = item_data.get("name", "Unnamed")
+            for cat_doc in shop_doc.reference.collection("categories").stream():
+                cat_data = cat_doc.to_dict()
+                cat_id = cat_doc.id
 
-                # Get embeddings (if any)
-                embeddings = []
-                for emb_doc in item_doc.reference.collection("embeddings").stream():
-                    vector = emb_doc.to_dict().get("vector")
-                    if vector:
-                        embeddings.append(np.array(vector))
+                category_entry = {
+                    "category_id": cat_id,
+                    "category_name": cat_data.get("name", ""),
+                    "items": []
+                }
 
-                # Get batches for this item (NEW: batch breakdown)
-                batches = item_data.get("batches", [])
-                processed_batches = []
-                for batch in batches:
-                    processed_batches.append({
-                        "batch_id": batch.get("id", f"batch_{int(time.time()*1000)}"),
-                        "batch_name": batch.get("batchName", batch.get("batch_name", "Batch")),
-                        "quantity": float(batch.get("quantity", 0)),
-                        "remaining_quantity": float(batch.get("quantity", 0)),  # Will be updated during sales
-                        "unit": batch.get("unit", "unit"),
-                        "buy_price": float(batch.get("buyPrice", 0) or batch.get("buy_price", 0)),
-                        "sell_price": float(batch.get("sellPrice", 0) or batch.get("sell_price", 0)),
-                        "timestamp": batch.get("timestamp", 0),
-                        "date": batch.get("date", ""),
-                        "added_by": batch.get("addedBy", ""),
-                        "selling_unit_allocations": batch.get("sellingUnitAllocations", {})  # Track allocations
+                for item_doc in cat_doc.reference.collection("items").stream():
+                    item_data = item_doc.to_dict()
+                    item_id = item_doc.id
+                    item_name = item_data.get("name", "Unnamed")
+
+                    # Get embeddings (if any)
+                    embeddings = []
+                    for emb_doc in item_doc.reference.collection("embeddings").stream():
+                        vector = emb_doc.to_dict().get("vector")
+                        if vector:
+                            embeddings.append(np.array(vector))
+
+                    # Get batches for this item (NEW: batch breakdown)
+                    batches = item_data.get("batches", [])
+                    processed_batches = []
+                    for batch in batches:
+                        processed_batches.append({
+                            "batch_id": batch.get("id", f"batch_{int(time.time()*1000)}"),
+                            "batch_name": batch.get("batchName", batch.get("batch_name", "Batch")),
+                            "quantity": float(batch.get("quantity", 0)),
+                            "remaining_quantity": float(batch.get("quantity", 0)),  # Will be updated during sales
+                            "unit": batch.get("unit", "unit"),
+                            "buy_price": float(batch.get("buyPrice", 0) or batch.get("buy_price", 0)),
+                            "sell_price": float(batch.get("sellPrice", 0) or batch.get("sell_price", 0)),
+                            "timestamp": batch.get("timestamp", 0),
+                            "date": batch.get("date", ""),
+                            "added_by": batch.get("addedBy", ""),
+                            "selling_unit_allocations": batch.get("sellingUnitAllocations", {})  # Track allocations
+                        })
+
+                    # Get selling units for this item with batch links (NEW)
+                    selling_units = []
+                    try:
+                        # CORRECT PATH: Shops/{shop_id}/categories/{cat_id}/items/{item_id}/sellUnits
+                        sell_units_ref = db.collection("Shops").document(shop_id) \
+                            .collection("categories").document(cat_id) \
+                            .collection("items").document(item_id) \
+                            .collection("sellUnits")
+                        
+                        sell_units_docs = list(sell_units_ref.stream())
+                        
+                        for sell_unit_doc in sell_units_docs:
+                            sell_unit_data = sell_unit_doc.to_dict()
+                            sell_unit_id = sell_unit_doc.id
+                            
+                            # Get batch links from selling unit (NEW)
+                            batch_links = sell_unit_data.get("batchLinks", [])
+                            total_units_available = 0
+                            
+                            # Calculate total available units from batch links
+                            for link in batch_links:
+                                total_units_available += link.get("maxUnitsAvailable", 0) - link.get("allocatedUnits", 0)
+                            
+                            selling_units.append({
+                                "sell_unit_id": sell_unit_doc.id,
+                                "name": sell_unit_data.get("name", ""),
+                                "conversion_factor": float(sell_unit_data.get("conversionFactor", 1.0)),
+                                "sell_price": float(sell_unit_data.get("sellPrice", 0.0)),
+                                "images": sell_unit_data.get("images", []),
+                                "is_base_unit": sell_unit_data.get("isBaseUnit", False),
+                                "thumbnail": sell_unit_data.get("images", [None])[0] if sell_unit_data.get("images") else None,
+                                "created_at": sell_unit_data.get("createdAt"),
+                                "updated_at": sell_unit_data.get("updatedAt"),
+                                # NEW: Batch tracking for selling units
+                                "batch_links": batch_links,
+                                "total_units_available": total_units_available,
+                                "has_batch_links": len(batch_links) > 0
+                            })
+                        
+                    except Exception as e:
+                        print(f"❌ ERROR fetching selling units for item {item_name}: {e}")
+                        # Don't crash, just continue
+
+                    # Calculate total stock from batches
+                    total_stock_from_batches = sum(batch.get("quantity", 0) for batch in batches)
+                    main_stock = float(item_data.get("stock", 0) or 0)
+                    
+                    # Use batch total if available, otherwise use main stock
+                    effective_stock = total_stock_from_batches if total_stock_from_batches > 0 else main_stock
+                    
+                    category_entry["items"].append({
+                        "item_id": item_doc.id,
+                        "name": item_data.get("name", ""),
+                        "thumbnail": item_data.get("images", [None])[0],
+                        "sell_price": float(item_data.get("sellPrice", 0) or 0),
+                        "buy_price": float(item_data.get("buyPrice", 0) or 0),
+                        "stock": effective_stock,
+                        "base_unit": item_data.get("baseUnit", "unit"),
+                        "embeddings": embeddings,
+                        "has_embeddings": len(embeddings) > 0,
+                        "selling_units": selling_units,
+                        "category_id": category_entry["category_id"],
+                        "category_name": category_entry["category_name"],
+                        # NEW: Batch tracking
+                        "batches": processed_batches,
+                        "has_batches": len(processed_batches) > 0,
+                        "total_stock_from_batches": total_stock_from_batches
                     })
 
-                # Get selling units for this item with batch links (NEW)
-                selling_units = []
-                try:
-                    # CORRECT PATH: Shops/{shop_id}/categories/{cat_id}/items/{item_id}/sellUnits
-                    sell_units_ref = db.collection("Shops").document(shop_id) \
-                        .collection("categories").document(cat_id) \
-                        .collection("items").document(item_id) \
-                        .collection("sellUnits")
+                # Only skip categories that have no items at all
+                if category_entry["items"]:
+                    shop_entry["categories"].append(category_entry)
+
+            # Only skip shops with no categories
+            if shop_entry["categories"]:
+                shops_result.append(shop_entry)
+
+        embedding_cache_full["shops"] = shops_result
+        embedding_cache_full["total_shops"] = len(shops_result)
+        embedding_cache_full["last_updated"] = time.time()
+
+        # Cache statistics
+        total_main_items = 0
+        total_selling_units = 0
+        total_batches = 0
+        for shop in shops_result:
+            for category in shop["categories"]:
+                total_main_items += len(category["items"])
+                for item in category["items"]:
+                    total_selling_units += len(item.get("selling_units", []))
+                    total_batches += len(item.get("batches", []))
+
+        print(f"\n[READY] Cached {len(shops_result)} shops, {total_main_items} main items, {total_selling_units} selling units, {total_batches} batches")
+        print(f"[TIME] Cache refresh took {round((time.time()-start)*1000,2)}ms")
+        
+        return shops_result
+        
+    except Exception as e:
+        print(f"🔥 CRITICAL ERROR refreshing cache: {e}")
+        print("⚠️  Initializing empty cache...")
+        # Initialize empty but valid cache structure
+        embedding_cache_full["shops"] = []
+        embedding_cache_full["last_updated"] = time.time()
+        embedding_cache_full["total_shops"] = 0
+        return []
+
+def safe_refresh_cache_with_retry(max_retries=3):
+    """Refresh cache with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            print(f"\n🔄 Cache refresh attempt {attempt + 1}/{max_retries}")
+            shops = refresh_full_item_cache()
+            
+            if len(shops) > 0:
+                print(f"✅ Cache refresh successful! Loaded {len(shops)} shops")
+                return True
+            else:
+                print(f"⚠️  Cache refresh returned empty (attempt {attempt + 1})")
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait before retry
                     
-                    print(f"\n🔍 Checking selling units for item: {item_name}")
-                    print(f"   Item ID: {item_id}")
-                    print(f"   Category ID: {cat_id}")
-                    print(f"   Collection path: Shops/{shop_id}/categories/{cat_id}/items/{item_id}/sellUnits")
-                    
-                    sell_units_docs = list(sell_units_ref.stream())
-                    
-                    print(f"   Found {len(sell_units_docs)} selling units")
-                    
-                    for sell_unit_doc in sell_units_docs:
-                        sell_unit_data = sell_unit_doc.to_dict()
-                        sell_unit_id = sell_unit_doc.id
-                        
-                        print(f"   Selling Unit: {sell_unit_data.get('name', 'No name')}")
-                        print(f"     ID: {sell_unit_id}")
-                        print(f"     Conversion Factor: {sell_unit_data.get('conversionFactor', 'Not set')}")
-                        print(f"     Sell Price: {sell_unit_data.get('sellPrice', 'Not set')}")
-                        
-                        # Get batch links from selling unit (NEW)
-                        batch_links = sell_unit_data.get("batchLinks", [])
-                        total_units_available = 0
-                        
-                        # Calculate total available units from batch links
-                        for link in batch_links:
-                            total_units_available += link.get("maxUnitsAvailable", 0) - link.get("allocatedUnits", 0)
-                        
-                        selling_units.append({
-                            "sell_unit_id": sell_unit_doc.id,
-                            "name": sell_unit_data.get("name", ""),
-                            "conversion_factor": float(sell_unit_data.get("conversionFactor", 1.0)),
-                            "sell_price": float(sell_unit_data.get("sellPrice", 0.0)),
-                            "images": sell_unit_data.get("images", []),
-                            "is_base_unit": sell_unit_data.get("isBaseUnit", False),
-                            "thumbnail": sell_unit_data.get("images", [None])[0] if sell_unit_data.get("images") else None,
-                            "created_at": sell_unit_data.get("createdAt"),
-                            "updated_at": sell_unit_data.get("updatedAt"),
-                            # NEW: Batch tracking for selling units
-                            "batch_links": batch_links,
-                            "total_units_available": total_units_available,
-                            "has_batch_links": len(batch_links) > 0
-                        })
-                    
-                except Exception as e:
-                    print(f"❌ ERROR fetching selling units: {e}")
-                    # Don't crash, just continue
-
-                # Calculate total stock from batches
-                total_stock_from_batches = sum(batch.get("quantity", 0) for batch in batches)
-                main_stock = float(item_data.get("stock", 0) or 0)
-                
-                # Use batch total if available, otherwise use main stock
-                effective_stock = total_stock_from_batches if total_stock_from_batches > 0 else main_stock
-                
-                category_entry["items"].append({
-                    "item_id": item_doc.id,
-                    "name": item_data.get("name", ""),
-                    "thumbnail": item_data.get("images", [None])[0],
-                    "sell_price": float(item_data.get("sellPrice", 0) or 0),
-                    "buy_price": float(item_data.get("buyPrice", 0) or 0),
-                    "stock": effective_stock,
-                    "base_unit": item_data.get("baseUnit", "unit"),
-                    "embeddings": embeddings,
-                    "has_embeddings": len(embeddings) > 0,
-                    "selling_units": selling_units,
-                    "category_id": category_entry["category_id"],
-                    "category_name": category_entry["category_name"],
-                    # NEW: Batch tracking
-                    "batches": processed_batches,
-                    "has_batches": len(processed_batches) > 0,
-                    "total_stock_from_batches": total_stock_from_batches
-                })
-
-            # Only skip categories that have no items at all
-            if category_entry["items"]:
-                shop_entry["categories"].append(category_entry)
-
-        # Only skip shops with no categories
-        if shop_entry["categories"]:
-            shops_result.append(shop_entry)
-
-    embedding_cache_full["shops"] = shops_result
-    embedding_cache_full["total_shops"] = len(shops_result)
-    embedding_cache_full["last_updated"] = time.time()
-
-    # Cache statistics
-    total_main_items = 0
-    total_selling_units = 0
-    total_batches = 0
-    for shop in shops_result:
-        for category in shop["categories"]:
-            total_main_items += len(category["items"])
-            for item in category["items"]:
-                total_selling_units += len(item.get("selling_units", []))
-                total_batches += len(item.get("batches", []))
-
-    print(f"\n[READY] Cached {len(shops_result)} shops, {total_main_items} main items, {total_selling_units} selling units, {total_batches} batches")
-    print(f"[TIME] Cache refresh took {round((time.time()-start)*1000,2)}ms")
+        except Exception as e:
+            print(f"❌ Cache refresh attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
     
-    return shops_result
+    print("🚨 All cache refresh attempts failed")
+    return False
 
+# ======================================================
+# FIREBASE LISTENERS
+# ======================================================
 
 def on_full_item_snapshot(col_snapshot, changes, read_time):
     """Listener for changes to main items"""
     print("[LISTENER] Main items changed → refreshing FULL cache")
     refresh_full_item_cache()
 
-
 def on_selling_units_snapshot(col_snapshot, changes, read_time):
     """Listener for changes to selling units"""
     print("[LISTENER] Selling units changed → refreshing FULL cache")
     refresh_full_item_cache()
 
-
 # ======================================================
-# NEW: BATCH-AWARE FIFO HELPER FUNCTIONS
+# HELPER FUNCTIONS
 # ======================================================
 
 def find_item_in_cache(shop_id, item_id):
@@ -368,7 +367,10 @@ def allocate_selling_unit_fifo(batch_links, requested_units, conversion_factor):
     
     return {"success": True, "allocation": allocation, "total_price": total_price}
 
-# PLANS
+# ======================================================
+# PLANS CONFIG
+# ======================================================
+
 PLANS_CONFIG = {
     "SOLO": {
         "id": "SOLO",
@@ -466,7 +468,7 @@ PLANS_CONFIG = {
 # ======================================================
 # ROUTES
 # ======================================================
-# Option 3: Simple individual routes (recommended for clarity)
+
 @app.route("/")
 def home():
     return render_template(
@@ -507,7 +509,7 @@ def pricing():
         title="Pricing - Superkeeper",
         meta_desc="Simple, seat-based pricing. Start free, upgrade as you grow.",
         active_page="pricing",
-        plans=PLANS_CONFIG.values(),  # Pass all plans to template
+        plans=PLANS_CONFIG.values(),
         annual_discounts=annual_discounts,
         featured_plan="TEAM"
     )
@@ -534,10 +536,10 @@ def story():
 def dashboard():
     return render_template("dashboard.html")
 
-
 # ======================================================
 # VECTORIZE ITEM (STOCK IMAGE → EMBEDDING)
 # ======================================================
+
 @app.route("/vectorize-item", methods=["POST"])
 def vectorize_item():
     try:
@@ -588,10 +590,10 @@ def vectorize_item():
         print("🔥 /vectorize-item error:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# ======================================================
+# SALES ENDPOINT WITH CACHE RECOVERY
+# ======================================================
 
-# ======================================================
-# ======================================================
-# BATCH-AWARE SALES SEARCH ROUTE WITH FIXED CONVERSION LOGIC
 @app.route("/sales", methods=["POST"])
 def sales():
     """
@@ -606,14 +608,13 @@ def sales():
         print(f"\n{'='*80}")
         print(f"🔍 SEARCH REQUEST RECEIVED at {time.strftime('%H:%M:%S')}")
         print(f"{'='*80}")
-        print(f"📋 Request Data: {json.dumps(data, indent=2)}")
 
         # Get query and shop_id
         query = (data.get("query") or "").lower().strip()
         shop_id = data.get("shop_id")
         customer_cart_id = data.get("cart_id")
         
-        print(f"🎯 Search Query: '{query}' (original: '{data.get('query', '')}')")
+        print(f"🎯 Search Query: '{query}'")
         print(f"🏪 Shop ID: {shop_id}")
         print(f"🛒 Cart ID: {customer_cart_id}")
 
@@ -628,18 +629,63 @@ def sales():
                 }
             }), 400
 
+        # ==============================================
+        # CRITICAL FIX: CHECK AND RECOVER CACHE IF EMPTY
+        # ==============================================
+        if embedding_cache_full["total_shops"] == 0 or len(embedding_cache_full["shops"]) == 0:
+            print("⚠️  Cache is empty! Attempting immediate refresh...")
+            try:
+                # Try to refresh cache immediately
+                refresh_full_item_cache()
+                
+                # If still empty, return a helpful error
+                if embedding_cache_full["total_shops"] == 0:
+                    print("❌ Cache refresh failed - no shops loaded")
+                    return jsonify({
+                        "items": [],
+                        "meta": {
+                            "error": "System is initializing cache. Please try again in a few seconds.",
+                            "cache_status": "empty",
+                            "processing_time_ms": round((time.time() - start_time) * 1000, 2)
+                        }
+                    }), 503  # Service Unavailable
+                else:
+                    print(f"✅ Cache refreshed! Now have {embedding_cache_full['total_shops']} shops")
+            except Exception as cache_error:
+                print(f"❌ Cache refresh error: {cache_error}")
+                return jsonify({
+                    "items": [],
+                    "meta": {
+                        "error": "System cache initialization in progress",
+                        "cache_error": str(cache_error),
+                        "processing_time_ms": round((time.time() - start_time) * 1000, 2)
+                    }
+                }), 503
+
         # Find shop in cache
         print(f"\n📦 LOOKING FOR SHOP {shop_id} IN CACHE...")
         shop = next((s for s in embedding_cache_full["shops"] if s["shop_id"] == shop_id), None)
+        
         if not shop:
-            print(f"❌ Shop {shop_id} NOT FOUND in cache")
-            return jsonify({
-                "items": [],
-                "meta": {
-                    "error": f"Shop {shop_id} not found",
-                    "processing_time_ms": round((time.time() - start_time) * 1000, 2)
-                }
-            }), 404
+            # Shop not found in cache - try one more refresh
+            print(f"⚠️  Shop {shop_id} not found in cache. Refreshing cache...")
+            try:
+                refresh_full_item_cache()
+                shop = next((s for s in embedding_cache_full["shops"] if s["shop_id"] == shop_id), None)
+            except Exception as refresh_error:
+                print(f"❌ Cache refresh failed during search: {refresh_error}")
+            
+            if not shop:
+                print(f"❌ Shop {shop_id} NOT FOUND in cache after refresh")
+                return jsonify({
+                    "items": [],
+                    "meta": {
+                        "error": f"Shop {shop_id} not found or has no items",
+                        "cache_status": "shop_not_found",
+                        "total_shops_in_cache": embedding_cache_full["total_shops"],
+                        "processing_time_ms": round((time.time() - start_time) * 1000, 2)
+                    }
+                }), 404
 
         shop_name = shop.get("shop_name", "Unnamed")
         print(f"✅ Found shop: {shop_name}")
@@ -1121,8 +1167,8 @@ def sales():
                                 "batch_id": batch.get("batch_id") if batch else None,
                                 "batch_name": batch.get("batch_name") if batch else None,
                                 "batch_remaining": availability["real_quantity"] if availability else 0,
-                                "real_available_units": available_selling_units,  # This is now CORRECT!
-                                "real_available_fraction": 0,  # Not used with new logic
+                                "real_available_units": available_selling_units,
+                                "real_available_fraction": 0,
                                 "price": round(unit_price, 4),
                                 "available_stock": round(float(batch.get("quantity", 0)) if batch else 0, 2),
                                 "conversion_factor": conversion,
@@ -1278,7 +1324,11 @@ def sales():
                 "note": "Check server logs for detailed error trace"
             }
         }), 500
+
 # ======================================================
+# COMPLETE SALE ENDPOINT
+# ======================================================
+
 @app.route("/complete-sale", methods=["POST"])
 def complete_sale():
     """
@@ -1452,8 +1502,9 @@ def complete_sale():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # ======================================================
-# ITEM OPTIMIZATION (UPDATED WITH BATCH INFO)
+# CACHE MANAGEMENT ENDPOINTS
 # ======================================================
+
 @app.route("/item-optimization", methods=["GET"])
 def item_optimization():
     # Calculate batch statistics
@@ -1483,10 +1534,6 @@ def item_optimization():
         }
     })
 
-
-# ======================================================
-# DEBUG ENDPOINT (UPDATED WITH BATCH INFO)
-# ======================================================
 @app.route("/debug-cache", methods=["GET"])
 def debug_cache():
     """Debug endpoint to check cache contents (updated with batch tracking)"""
@@ -1534,13 +1581,40 @@ def debug_cache():
     except (IndexError, KeyError) as e:
         return jsonify({"error": f"Cache structure issue: {str(e)}"}), 500
 
+@app.route("/cache/status", methods=["GET"])
+def cache_status():
+    """Check cache status"""
+    return jsonify({
+        "status": "healthy" if embedding_cache_full["total_shops"] > 0 else "empty",
+        "total_shops": embedding_cache_full["total_shops"],
+        "last_updated": embedding_cache_full["last_updated"],
+        "cache_age_seconds": time.time() - embedding_cache_full["last_updated"] if embedding_cache_full["last_updated"] else None,
+        "has_shops": len(embedding_cache_full["shops"]) > 0
+    })
 
-
-
+@app.route("/cache/refresh", methods=["POST"])
+def manual_cache_refresh():
+    """Manually refresh cache"""
+    try:
+        print("\n🔄 MANUAL CACHE REFRESH REQUESTED")
+        shops = refresh_full_item_cache()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Cache refreshed successfully. {len(shops)} shops loaded.",
+            "total_shops": embedding_cache_full["total_shops"],
+            "last_updated": embedding_cache_full["last_updated"]
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 # ======================================================
-# PLAN INITIALIZATION ROUTES
+# OTHER ROUTES
 # ======================================================
+
 @app.route("/ensure-plan", methods=["POST"])
 def ensure_plan():
     """
@@ -1599,18 +1673,10 @@ def ensure_plan():
             "error": "Internal server error"
         }), 500
 
-
-# ======================================================
-# ADMIN DASHBOARD
-# ======================================================
 @app.route("/admin")
 def admin():
     return render_template("admindashboard.html")
 
-
-# ======================================================
-# TEST SELLING UNITS ENDPOINT
-# ======================================================
 @app.route("/test-selling-units", methods=["GET"])
 def test_selling_units():
     """Test endpoint to check selling units directly in Firestore"""
@@ -1658,21 +1724,44 @@ def test_selling_units():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ======================================================
+# RUN SERVER WITH PROPER CACHE INITIALIZATION
+# ======================================================
 
-# ======================================================
-# RUN SERVER
-# ======================================================
 if __name__ == "__main__":
-    print("[INIT] Preloading FULL cache (with batch tracking)...")
-    refresh_full_item_cache()
+    print("\n" + "="*60)
+    print("🚀 SUPERKEEPER SERVER STARTING")
+    print("="*60)
     
-    # Set up listeners for both main items AND selling units
-    print("[INIT] Setting up Firestore listeners...")
-    db.collection_group("items").on_snapshot(on_full_item_snapshot)
-    db.collection_group("sellUnits").on_snapshot(on_selling_units_snapshot)
-    print("[READY] Listeners active for items and selling units")
+    # Step 1: Initialize cache with retry logic
+    print("\n🔧 Initializing cache...")
+    cache_success = safe_refresh_cache_with_retry(max_retries=3)
     
-
-    app.run(debug=True)
-
-
+    if cache_success:
+        print(f"✅ Cache initialized with {embedding_cache_full['total_shops']} shops")
+    else:
+        print("⚠️  Cache initialization failed - will try on first request")
+    
+    # Step 2: Set up Firestore listeners for real-time updates
+    print("\n[INIT] Setting up Firestore listeners...")
+    try:
+        db.collection_group("items").on_snapshot(on_full_item_snapshot)
+        db.collection_group("sellUnits").on_snapshot(on_selling_units_snapshot)
+        print("[READY] Listeners active for items and selling units")
+    except Exception as e:
+        print(f"[WARNING] Could not set up listeners: {e}")
+        print("[INFO] Running without real-time updates - cache will refresh on requests")
+    
+    # Step 3: Show available endpoints
+    print("\n📡 AVAILABLE ENDPOINTS:")
+    print("  GET  /cache/status      - Check cache health")
+    print("  POST /cache/refresh     - Manually refresh cache")
+    print("  GET  /debug-cache       - Debug cache contents")
+    print("  POST /sales             - Search for items")
+    print("  POST /complete-sale     - Complete a sale")
+    print("="*60)
+    
+    # Step 4: Start server
+    port = int(os.environ.get("PORT", 5000))
+    print(f"\n🌐 Server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
