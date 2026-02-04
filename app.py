@@ -5,7 +5,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 import numpy as np
-from PIL import Image
+
 from io import BytesIO
 
 import tensorflow_hub as hub
@@ -1674,3 +1674,4 @@ if __name__ == "__main__":
     
 
     app.run(debug=True)
+
