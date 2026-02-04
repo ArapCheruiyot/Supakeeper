@@ -1,21 +1,21 @@
-// cart-icon.js - SMART CART SYSTEM WITH BACKEND INTEGRATION (DRAGGABLE)
+// cart-icon.js - SMART CART SYSTEM WITH FRONTEND SALE PROCESSING
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
 import { db } from "./firebase-config.js";
-import { doc, getDoc } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
-
-const FLASK_BACKEND_URL = window.location.origin;
+import { 
+    doc, 
+    getDoc, 
+    updateDoc, 
+    arrayUnion,
+    serverTimestamp,
+    setDoc
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
 
 // ====================================================
 // GLOBAL CART STATE
 // ====================================================
 let cart = [];
 let currentShopId = null;
-let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
-let initialX = 0;
-let initialY = 0;
 
 // ====================================================
 // DEBUG UTILITIES
@@ -57,7 +57,7 @@ function getCartTotal() {
 }
 
 // ====================================================
-// DRAGGABLE CART ICON
+// CART ICON
 // ====================================================
 
 function updateCartIcon() {
@@ -70,18 +70,6 @@ function updateCartIcon() {
         cartIcon.id = 'sales-cart-icon';
         document.body.appendChild(cartIcon);
         addCartIconStyles();
-        
-        // Load saved position
-        const savedPos = localStorage.getItem('cart_icon_position');
-        if (savedPos) {
-            try {
-                const { x, y } = JSON.parse(savedPos);
-                cartIcon.style.left = `${x}px`;
-                cartIcon.style.top = `${y}px`;
-            } catch (e) {
-                console.warn('Failed to load cart icon position:', e);
-            }
-        }
     }
 
     const count = getCartCount();
@@ -91,51 +79,26 @@ function updateCartIcon() {
         <div class="cart-icon-container" style="
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 8px 16px;
+            padding: 12px 20px;
             border-radius: 50px;
             font-weight: bold;
-            font-size: 14px;
+            font-size: 16px;
             cursor: pointer;
             box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
             border: 2px solid white;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
             user-select: none;
             transition: transform 0.2s, box-shadow 0.2s;
-            position: relative;
         ">
-            <span style="font-size: 16px;">🛒</span>
-            <div>
-                <div style="font-size: 12px; line-height: 1.2;">${count} items</div>
-                <div style="font-size: 10px; opacity: 0.9;">$${total.toFixed(2)}</div>
-            </div>
-            <div class="drag-handle" style="
-                position: absolute;
-                top: 2px;
-                right: 2px;
-                width: 12px;
-                height: 12px;
-                background: rgba(255,255,255,0.3);
-                border-radius: 50%;
-                cursor: move;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 8px;
-            ">✥</div>
+            🛒 ${count} items | $${total.toFixed(2)}
         </div>
     `;
 
     const container = cartIcon.querySelector('.cart-icon-container');
-    const dragHandle = cartIcon.querySelector('.drag-handle');
     
-    // Click to open cart
-    container.onclick = (e) => {
-        if (isDragging) {
-            isDragging = false;
-            return;
-        }
+    container.onclick = () => {
         if (count > 0) {
             showCartReview();
         } else {
@@ -143,22 +106,14 @@ function updateCartIcon() {
         }
     };
     
-    // Drag functionality
-    dragHandle.onmousedown = startDrag;
-    dragHandle.ontouchstart = startDragTouch;
-    
     container.onmouseenter = () => {
-        if (!isDragging) {
-            container.style.transform = 'scale(1.05)';
-            container.style.boxShadow = '0 6px 25px rgba(102, 126, 234, 0.6)';
-        }
+        container.style.transform = 'scale(1.05)';
+        container.style.boxShadow = '0 6px 25px rgba(102, 126, 234, 0.6)';
     };
     
     container.onmouseleave = () => {
-        if (!isDragging) {
-            container.style.transform = 'scale(1)';
-            container.style.boxShadow = '0 4px 20px rgba(102, 126, 234, 0.4)';
-        }
+        container.style.transform = 'scale(1)';
+        container.style.boxShadow = '0 4px 20px rgba(102, 126, 234, 0.4)';
     };
     
     if (count > 0) {
@@ -169,139 +124,6 @@ function updateCartIcon() {
     debugLog('Cart icon updated');
 }
 
-function startDrag(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (!cartIcon) return;
-    
-    isDragging = true;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    initialX = cartIcon.offsetLeft;
-    initialY = cartIcon.offsetTop;
-    
-    document.addEventListener('mousemove', drag);
-    document.addEventListener('mouseup', stopDrag);
-    
-    cartIcon.querySelector('.cart-icon-container').style.cursor = 'grabbing';
-    cartIcon.querySelector('.cart-icon-container').style.boxShadow = '0 8px 30px rgba(102, 126, 234, 0.8)';
-}
-
-function startDragTouch(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (!cartIcon) return;
-    
-    isDragging = true;
-    dragStartX = e.touches[0].clientX;
-    dragStartY = e.touches[0].clientY;
-    initialX = cartIcon.offsetLeft;
-    initialY = cartIcon.offsetTop;
-    
-    document.addEventListener('touchmove', dragTouch);
-    document.addEventListener('touchend', stopDragTouch);
-    
-    cartIcon.querySelector('.cart-icon-container').style.cursor = 'grabbing';
-    cartIcon.querySelector('.cart-icon-container').style.boxShadow = '0 8px 30px rgba(102, 126, 234, 0.8)';
-}
-
-function drag(e) {
-    if (!isDragging) return;
-    
-    e.preventDefault();
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (!cartIcon) return;
-    
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
-    
-    let newX = initialX + dx;
-    let newY = initialY + dy;
-    
-    // Keep within viewport bounds
-    const maxX = window.innerWidth - cartIcon.offsetWidth;
-    const maxY = window.innerHeight - cartIcon.offsetHeight;
-    
-    newX = Math.max(0, Math.min(newX, maxX));
-    newY = Math.max(0, Math.min(newY, maxY));
-    
-    cartIcon.style.left = `${newX}px`;
-    cartIcon.style.top = `${newY}px`;
-}
-
-function dragTouch(e) {
-    if (!isDragging) return;
-    
-    e.preventDefault();
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (!cartIcon) return;
-    
-    const dx = e.touches[0].clientX - dragStartX;
-    const dy = e.touches[0].clientY - dragStartY;
-    
-    let newX = initialX + dx;
-    let newY = initialY + dy;
-    
-    // Keep within viewport bounds
-    const maxX = window.innerWidth - cartIcon.offsetWidth;
-    const maxY = window.innerHeight - cartIcon.offsetHeight;
-    
-    newX = Math.max(0, Math.min(newX, maxX));
-    newY = Math.max(0, Math.min(newY, maxY));
-    
-    cartIcon.style.left = `${newX}px`;
-    cartIcon.style.top = `${newY}px`;
-}
-
-function stopDrag() {
-    if (!isDragging) return;
-    
-    isDragging = false;
-    document.removeEventListener('mousemove', drag);
-    document.removeEventListener('mouseup', stopDrag);
-    
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (cartIcon) {
-        cartIcon.querySelector('.cart-icon-container').style.cursor = 'pointer';
-        cartIcon.querySelector('.cart-icon-container').style.boxShadow = '0 4px 20px rgba(102, 126, 234, 0.4)';
-        
-        // Save position
-        saveCartPosition();
-    }
-}
-
-function stopDragTouch() {
-    if (!isDragging) return;
-    
-    isDragging = false;
-    document.removeEventListener('touchmove', dragTouch);
-    document.removeEventListener('touchend', stopDragTouch);
-    
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (cartIcon) {
-        cartIcon.querySelector('.cart-icon-container').style.cursor = 'pointer';
-        cartIcon.querySelector('.cart-icon-container').style.boxShadow = '0 4px 20px rgba(102, 126, 234, 0.4)';
-        
-        // Save position
-        saveCartPosition();
-    }
-}
-
-function saveCartPosition() {
-    const cartIcon = document.getElementById('sales-cart-icon');
-    if (cartIcon) {
-        const position = {
-            x: cartIcon.offsetLeft,
-            y: cartIcon.offsetTop
-        };
-        localStorage.setItem('cart_icon_position', JSON.stringify(position));
-    }
-}
-
 function addCartIconStyles() {
     if (!document.getElementById('cart-icon-styles')) {
         const style = document.createElement('style');
@@ -309,34 +131,17 @@ function addCartIconStyles() {
         style.textContent = `
             #sales-cart-icon {
                 position: fixed;
-                top: 40px;
-                right: 50px;
+                bottom: 30px;
+                right: 30px;
                 z-index: 9990;
-                max-width: 160px;
+                max-width: calc(100vw - 40px);
                 overflow: hidden;
-                cursor: move;
-                user-select: none;
             }
             
             .cart-icon-container {
                 position: relative;
-                min-width: 140px;
+                min-width: 180px;
                 text-align: center;
-                transition: all 0.3s ease;
-            }
-            
-            .cart-icon-container:hover .drag-handle {
-                opacity: 1;
-            }
-            
-            .drag-handle {
-                opacity: 0.5;
-                transition: opacity 0.2s;
-            }
-            
-            .drag-handle:hover {
-                opacity: 1;
-                background: rgba(255,255,255,0.5);
             }
             
             @keyframes cartBounce {
@@ -380,19 +185,6 @@ function addCartIconStyles() {
             @keyframes slideUp {
                 from { transform: translateY(20px); opacity: 0; }
                 to { transform: translateY(0); opacity: 1; }
-            }
-            
-            @media (max-width: 480px) {
-                #sales-cart-icon {
-                    max-width: 140px;
-                    right: 10px;
-                }
-                
-                .cart-icon-container {
-                    min-width: 120px;
-                    font-size: 12px;
-                    padding: 6px 12px;
-                }
             }
         `;
         document.head.appendChild(style);
@@ -980,11 +772,247 @@ function showPaymentModal() {
 }
 
 // ====================================================
-// COMPLETE SALE FUNCTION (UPDATED)
+// FRONTEND SALE COMPLETION FUNCTIONS
 // ====================================================
 
+/**
+ * Generate unique transaction ID
+ */
+function generateTransactionId() {
+    return `sale_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Process single sale item (replaces backend logic)
+ */
+async function processSaleItem(shop_id, seller, cartItem, index) {
+    console.log(`\n📦 Processing item ${index + 1}`, cartItem);
+    
+    const {
+        item_id,
+        category_id,
+        batch_id,
+        quantity,
+        unit = "unit",
+        conversion_factor = 1,
+        type = "main_item"
+    } = cartItem;
+    
+    // Validate required fields
+    if (!item_id || !category_id || !batch_id || !quantity || quantity <= 0) {
+        throw new Error(`Invalid item data: ${JSON.stringify({ item_id, category_id, batch_id, quantity })}`);
+    }
+    
+    const quantityNum = parseFloat(quantity);
+    const conversionFactorNum = parseFloat(conversion_factor);
+    
+    console.log(`   Type: ${type} | Qty: ${quantityNum} | Conv: ${conversionFactorNum}`);
+    
+    // Get item reference
+    const itemRef = doc(
+        db,
+        "Shops",
+        shop_id,
+        "categories",
+        category_id,
+        "items",
+        item_id
+    );
+    
+    const itemDoc = await getDoc(itemRef);
+    
+    if (!itemDoc.exists()) {
+        throw new Error(`Item ${item_id} not found in category ${category_id}`);
+    }
+    
+    const itemData = itemDoc.data();
+    const batches = itemData.batches || [];
+    const totalStock = parseFloat(itemData.stock || 0);
+    
+    // Find target batch
+    const batchIndex = batches.findIndex(b => b.id === batch_id);
+    if (batchIndex === -1) {
+        throw new Error(`Batch ${batch_id} not found for item ${itemData.name}`);
+    }
+    
+    const batch = batches[batchIndex];
+    const batchQty = parseFloat(batch.quantity || 0);
+    const sellPrice = parseFloat(batch.sellPrice || batch.sell_price || 0);
+    
+    console.log(`   Batch available: ${batchQty} base units`);
+    
+    // Calculate base quantity (critical conversion logic)
+    let baseQty;
+    let unitPrice;
+    let totalPrice;
+    
+    if (type === "selling_unit") {
+        // Selling units: quantity ÷ conversion_factor
+        baseQty = quantityNum / conversionFactorNum;
+        unitPrice = sellPrice / conversionFactorNum;
+        totalPrice = unitPrice * quantityNum;
+        
+        console.log(`   Selling unit: ${quantityNum} units ÷ ${conversionFactorNum} = ${baseQty} base units`);
+        console.log(`   Unit price: $${sellPrice} ÷ ${conversionFactorNum} = $${unitPrice}`);
+    } else {
+        // Main item: no conversion needed
+        baseQty = quantityNum;
+        unitPrice = sellPrice;
+        totalPrice = sellPrice * baseQty;
+        
+        console.log(`   Main item: ${quantityNum} base units`);
+    }
+    
+    console.log(`   Required to deduct: ${baseQty} base units`);
+    
+    // Validate stock availability
+    if (batchQty < baseQty) {
+        throw new Error(
+            `Insufficient stock in batch ${batch_id}. ` +
+            `Available: ${batchQty} base units, Requested: ${baseQty} base units`
+        );
+    }
+    
+    // Calculate new quantities
+    const newBatchQty = batchQty - baseQty;
+    const newTotalStock = totalStock - baseQty;
+    
+    // Create stock transaction
+    const stockTxn = {
+        id: generateTransactionId(),
+        type: "sale",
+        item_type: type,
+        batchId: batch_id,
+        quantity: baseQty,
+        selling_units_quantity: type === "selling_unit" ? quantityNum : null,
+        unit: unit,
+        sellPrice: sellPrice,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice,
+        timestamp: Math.floor(Date.now() / 1000),
+        performedBy: seller,
+        conversion_factor: type === "selling_unit" ? conversionFactorNum : null
+    };
+    
+    // Update batch quantity
+    const updatedBatches = [...batches];
+    updatedBatches[batchIndex] = {
+        ...updatedBatches[batchIndex],
+        quantity: newBatchQty
+    };
+    
+    // Get existing stock transactions
+    const stockTransactions = itemData.stockTransactions || [];
+    
+    // Update Firestore document
+    await updateDoc(itemRef, {
+        batches: updatedBatches,
+        stock: newTotalStock,
+        stockTransactions: arrayUnion(stockTxn),
+        lastStockUpdate: serverTimestamp(),
+        lastTransactionId: stockTxn.id
+    });
+    
+    console.log(`   ✅ Deducted: ${baseQty} base units`);
+    console.log(`   ✅ Remaining in batch: ${newBatchQty}`);
+    console.log(`   ✅ Total price: $${totalPrice}`);
+    
+    return {
+        item_id,
+        item_type: type,
+        batch_id,
+        quantity_sold: quantityNum,
+        base_units_deducted: baseQty,
+        remaining_batch_quantity: newBatchQty,
+        remaining_total_stock: newTotalStock,
+        batch_exhausted: newBatchQty === 0,
+        total_price: totalPrice,
+        unit_price: unitPrice,
+        transaction_id: stockTxn.id,
+        item_ref: itemRef,
+        original_batch_qty: batchQty,
+        original_total_stock: totalStock
+    };
+}
+
+/**
+ * Rollback item deduction (for error recovery)
+ */
+async function rollbackItemDeduction(itemResult) {
+    try {
+        const { item_ref, original_batch_qty, original_total_stock, batch_id } = itemResult;
+        
+        const itemDoc = await getDoc(item_ref);
+        if (!itemDoc.exists()) return;
+        
+        const itemData = itemDoc.data();
+        const batches = itemData.batches || [];
+        const batchIndex = batches.findIndex(b => b.id === batch_id);
+        
+        if (batchIndex !== -1) {
+            const updatedBatches = [...batches];
+            updatedBatches[batchIndex] = {
+                ...updatedBatches[batchIndex],
+                quantity: original_batch_qty
+            };
+            
+            await updateDoc(item_ref, {
+                batches: updatedBatches,
+                stock: original_total_stock,
+                lastStockUpdate: serverTimestamp()
+            });
+            
+            itemResult.rolled_back = true;
+            console.log(`🔄 Rolled back item`);
+        }
+    } catch (error) {
+        console.error('Rollback error:', error);
+    }
+}
+
+/**
+ * Create sale record document
+ */
+async function createSaleRecord(shop_id, seller, items, updatedItems) {
+    const saleId = generateTransactionId();
+    const totalAmount = updatedItems.reduce((sum, item) => sum + item.total_price, 0);
+    
+    const saleRecord = {
+        id: saleId,
+        shop_id,
+        seller,
+        items: items.map(item => ({
+            ...item,
+            processed_at: new Date().toISOString()
+        })),
+        processed_items: updatedItems,
+        total_amount: totalAmount,
+        timestamp: new Date().toISOString(),
+        created_at: serverTimestamp(),
+        status: 'completed',
+        payment_method: 'cash',
+        transaction_count: updatedItems.length
+    };
+    
+    // Save to Firestore in a sales collection
+    const saleRef = doc(db, "Shops", shop_id, "sales", saleId);
+    
+    try {
+        await setDoc(saleRef, saleRecord);
+        console.log('📝 Sale record created:', saleId);
+    } catch (error) {
+        console.warn('Could not save sale record:', error);
+        // Sale still successful, just record creation failed
+    }
+    
+    return saleRecord;
+}
+
+/**
+ * Main sale completion function (replaces backend call)
+ */
 async function completeSale(paymentDetails = {}) {
-    console.log('🛒 Starting smart sale completion');
+    console.log('🛒 Starting FRONTEND sale completion');
     
     const auth = getAuth();
     const user = auth.currentUser;
@@ -993,85 +1021,99 @@ async function completeSale(paymentDetails = {}) {
     if (!currentShopId) currentShopId = user.uid;
     if (cart.length === 0) throw new Error("Cart is empty!");
 
-    // Prepare smart sale data
-    const saleData = {
-        shop_id: currentShopId,
-        user_id: user.uid,
-        seller: {
-            type: localStorage.getItem("sessionType") || "owner",
-            authUid: user.uid,
-            name: user.displayName || "",
-            email: user.email || ""
-        },
-        items: cart.map(item => ({
-            // Core IDs
-            item_id: item.item_id,
-            main_item_id: item.main_item_id || item.item_id,
-            category_id: item.category_id || 'unknown',
-            
-            // Item info
-            name: item.name,
-            display_name: item.display_name || item.name,
-            type: item.type || "main_item",
-            
-            // Quantity & Pricing
-            quantity: item.quantity,
-            price: item.price || item.sellPrice || item.sell_price || 0,
-            sellPrice: item.price || item.sellPrice || item.sell_price || 0,
-            
-            // Batch info
-            batch_id: item.batch_id,
-            batchId: item.batch_id,
-            batch_remaining: item.batch_remaining || 0,
-            
-            // Smart fields
-            can_fulfill: item.can_fulfill !== undefined ? item.can_fulfill : true,
-            batch_switch_required: item.batch_switch_required || false,
-            real_available: item.real_available,
-            
-            // Selling unit info
-            sell_unit_id: item.sell_unit_id,
-            conversion_factor: item.conversion_factor || 1,
-            
-            // Unit for backend
-            unit: item.type === 'selling_unit' ? (item.display_name || 'unit') : 'unit'
-        })),
-        payment: paymentDetails,
-        timestamp: new Date().toISOString(),
-        cart_id: localStorage.getItem('current_cart_id') // Track which cart
+    const shop_id = currentShopId;
+    const seller = {
+        type: localStorage.getItem("sessionType") || "owner",
+        authUid: user.uid,
+        name: user.displayName || "",
+        email: user.email || ""
     };
 
-    console.log('🛒 Sending smart sale data:', saleData);
+    // Transform cart items to sale format
+    const saleItems = cart.map(item => ({
+        item_id: item.item_id,
+        main_item_id: item.main_item_id || item.item_id,
+        category_id: item.category_id || 'unknown',
+        name: item.name,
+        display_name: item.display_name || item.name,
+        type: item.type || "main_item",
+        quantity: item.quantity,
+        price: item.price || item.sellPrice || item.sell_price || 0,
+        sellPrice: item.price || item.sellPrice || item.sell_price || 0,
+        batch_id: item.batch_id,
+        batchId: item.batch_id,
+        batch_remaining: item.batch_remaining || 0,
+        can_fulfill: item.can_fulfill !== undefined ? item.can_fulfill : true,
+        batch_switch_required: item.batch_switch_required || false,
+        real_available: item.real_available,
+        sell_unit_id: item.sell_unit_id,
+        conversion_factor: item.conversion_factor || 1,
+        unit: item.type === 'selling_unit' ? (item.display_name || 'unit') : 'unit'
+    }));
 
-    try {
-        const response = await fetch(`${FLASK_BACKEND_URL}/complete-sale`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(saleData)
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Sale failed: ${response.status} - ${errorText}`);
+    console.log('🛒 Processing sale with items:', saleItems.length);
+    
+    const updatedItems = [];
+    const errors = [];
+    
+    // Process each item sequentially
+    for (let idx = 0; idx < saleItems.length; idx++) {
+        const cartItem = saleItems[idx];
+        
+        try {
+            const result = await processSaleItem(shop_id, seller, cartItem, idx);
+            updatedItems.push(result);
+            console.log(`✅ Item ${idx + 1} processed successfully`);
+        } catch (error) {
+            errors.push({
+                item: cartItem,
+                error: error.message,
+                index: idx
+            });
+            console.log(`❌ Item ${idx + 1} failed:`, error.message);
         }
-
-        const result = await response.json();
-        console.log('🛒 Smart sale successful:', result);
-        
-        // Clear cart and reset cart ID
-        cart = [];
-        localStorage.removeItem('current_cart_id');
-        saveCartToStorage();
-        updateCartIcon();
-        
-        showNotification('✅ Smart sale completed successfully!', 'success', 5000);
-        
-        return result;
-        
-    } catch (error) {
-        console.error('🛒 Sale error:', error);
-        throw error;
     }
+    
+    // If any items failed, rollback successful ones
+    if (errors.length > 0) {
+        console.log('Rolling back successful items due to errors', errors);
+        
+        // Attempt rollback for successful items
+        for (const item of updatedItems) {
+            if (item.rolled_back !== true) {
+                try {
+                    await rollbackItemDeduction(item);
+                } catch (rollbackError) {
+                    console.error('Rollback failed:', rollbackError);
+                }
+            }
+        }
+        
+        throw new Error(`Sale partially failed: ${errors.length} item(s) could not be processed. ${errors[0].error}`);
+    }
+    
+    // Create sale record
+    const saleRecord = await createSaleRecord(shop_id, seller, saleItems, updatedItems);
+    
+    // Clear cart and reset cart ID
+    cart = [];
+    localStorage.removeItem('current_cart_id');
+    saveCartToStorage();
+    updateCartIcon();
+    
+    console.log('🎉 FRONTEND SALE COMPLETED SUCCESSFULLY', {
+        items_processed: updatedItems.length,
+        sale_id: saleRecord.id
+    });
+    
+    showNotification('✅ Frontend sale completed successfully!', 'success', 5000);
+    
+    return {
+        success: true,
+        updated_items: updatedItems,
+        sale_record: saleRecord,
+        message: `Sale completed successfully. ${updatedItems.length} item(s) processed.`
+    };
 }
 
 // ====================================================
@@ -1127,6 +1169,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateIcon: updateCartIcon,
         getCount: getCartCount,
         getTotal: getCartTotal,
+        completeSale: completeSale, // Expose for external use
         debug: () => {
             console.log('🛒 SMART CART DEBUG:', cart.map(item => ({
                 name: item.name,
@@ -1139,19 +1182,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
     
-    console.log('🛒 Smart Cart System Ready! (Draggable)');
+    console.log('🛒 Smart Cart System Ready!');
     console.log(`
 ╔═══════════════════════════════════════════╗
 ║     🧠 SMART CART SYSTEM READY           ║
 ╠═══════════════════════════════════════════╣
 ║ • Smart batch tracking                   ║
 ║ • Real stock management                  ║
-║ • Cart-aware functionality               ║
-║ • DRAGGABLE CART ICON                    ║
-║ • Integrated with sales.js               ║
+║ • Frontend sale processing               ║
+║ • Error recovery & rollback              ║
+║ • No backend required!                   ║
 ╚═══════════════════════════════════════════╝
 `);
 });
 
 // Export main function
-export { addItemToCart };
+export { addItemToCart, completeSale };

@@ -1,5 +1,5 @@
 // sales.js - SMART BATCH-AWARE SALES SYSTEM WITH BACKEND INTEGRATION
-// UPDATED WITH WORKING CLOSE BUTTON AND BETTER EVENT HANDLING
+// UPDATED FOR SELLING UNIT BATCH SWITCHING FIX
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
 import { db } from "./firebase-config.js";
@@ -297,7 +297,141 @@ function getItemPrice(item) {
 }
 
 // ====================================================
-// ONE-TAP ITEM HANDLER (UPDATED) - PERSISTENT SEARCH FIX
+// SELLING UNIT BATCH SWITCHING HELPER
+// ====================================================
+
+async function findBestBatchForSellingUnit(item) {
+    if (item.type !== 'selling_unit') {
+        return {
+            batch_id: item.batch_id,
+            batch_name: item.batch_name,
+            batch_switched: false
+        };
+    }
+    
+    console.log('🔍 Finding best batch for selling unit:', {
+        name: item.display_name || item.name,
+        conversion_factor: item.conversion_factor
+    });
+    
+    try {
+        // Get fresh batch data from Firestore
+        const itemRef = doc(
+            db,
+            "Shops",
+            currentShopId,
+            "categories",
+            item.category_id,
+            "items",
+            item.item_id
+        );
+        
+        const itemDoc = await getDoc(itemRef);
+        if (!itemDoc.exists()) {
+            console.log('❌ Item not found in Firestore');
+            return {
+                batch_id: item.batch_id,
+                batch_name: item.batch_name,
+                batch_switched: false
+            };
+        }
+        
+        const itemData = itemDoc.data();
+        const batches = itemData.batches || [];
+        const conversionFactor = parseFloat(item.conversion_factor || 1);
+        
+        console.log(`📊 Item has ${batches.length} batches, conversion: ${conversionFactor}`);
+        
+        if (batches.length === 0) {
+            console.log('⚠️ No batches found for item');
+            return {
+                batch_id: item.batch_id,
+                batch_name: item.batch_name,
+                batch_switched: false
+            };
+        }
+        
+        // Find batches that can provide at least 1 selling unit
+        const viableBatches = batches.filter(batch => {
+            const batchQty = parseFloat(batch.quantity || 0);
+            // CORRECT: Multiply by conversion factor to get available selling units
+            const availableSellingUnits = batchQty * conversionFactor;
+            console.log(`   Batch ${batch.id}: ${batchQty} base units → ${availableSellingUnits} selling units`);
+            return availableSellingUnits >= 1;
+        });
+        
+        console.log(`📊 Found ${viableBatches.length} viable batches with stock`);
+        
+        // If current batch is viable, use it
+        const currentBatch = batches.find(b => b.id === item.batch_id);
+        if (currentBatch) {
+            const currentBatchQty = parseFloat(currentBatch.quantity || 0);
+            const currentAvailableUnits = currentBatchQty * conversionFactor;
+            console.log(`📊 Current batch ${currentBatch.id}: ${currentBatchQty} base units → ${currentAvailableUnits} selling units`);
+            
+            if (currentAvailableUnits >= 1) {
+                console.log(`✅ Using current batch (has ${currentAvailableUnits} selling units available)`);
+                return {
+                    batch_id: currentBatch.id,
+                    batch_name: currentBatch.name || currentBatch.batch_name || `Batch ${currentBatch.id.substring(0, 4)}`,
+                    batch_remaining: currentBatchQty,
+                    real_available: currentAvailableUnits,
+                    batch_switched: false
+                };
+            }
+        }
+        
+        if (viableBatches.length === 0) {
+            console.log('⚠️ No batches have enough stock for even 1 selling unit');
+            // Use the batch with highest stock anyway
+            const sortedByStock = [...batches].sort((a, b) => 
+                parseFloat(b.quantity || 0) - parseFloat(a.quantity || 0)
+            );
+            const fallbackBatch = sortedByStock[0];
+            const availableUnits = parseFloat(fallbackBatch.quantity || 0) * conversionFactor;
+            
+            return {
+                batch_id: fallbackBatch.id,
+                batch_name: fallbackBatch.name || fallbackBatch.batch_name || `Batch ${fallbackBatch.id.substring(0, 4)}`,
+                batch_remaining: parseFloat(fallbackBatch.quantity || 0),
+                real_available: availableUnits,
+                batch_switched: false,
+                can_fulfill: false // Mark as can't fulfill
+            };
+        }
+        
+        // Sort viable batches by highest stock first
+        const sortedBatches = viableBatches.sort((a, b) => 
+            parseFloat(b.quantity || 0) - parseFloat(a.quantity || 0)
+        );
+        
+        const bestBatch = sortedBatches[0];
+        const batchQty = parseFloat(bestBatch.quantity || 0);
+        const availableUnits = batchQty * conversionFactor;
+        
+        console.log(`✅ Selected batch ${bestBatch.id}: ${batchQty} base units → ${availableUnits} selling units`);
+        
+        return {
+            batch_id: bestBatch.id,
+            batch_name: bestBatch.name || bestBatch.batch_name || `Batch ${bestBatch.id.substring(0, 4)}`,
+            batch_remaining: batchQty,
+            real_available: availableUnits,
+            batch_switched: bestBatch.id !== item.batch_id,
+            can_fulfill: true
+        };
+        
+    } catch (error) {
+        console.error('❌ Error finding best batch:', error);
+        return {
+            batch_id: item.batch_id,
+            batch_name: item.batch_name,
+            batch_switched: false
+        };
+    }
+}
+
+// ====================================================
+// ONE-TAP ITEM HANDLER (UPDATED WITH BATCH SWITCHING)
 // ====================================================
 
 async function handleOneTap(item) {
@@ -311,6 +445,33 @@ async function handleOneTap(item) {
         is_current_batch: item.is_current_batch,
         search_score: item.search_score || 0
     });
+    
+    // SPECIAL HANDLING FOR SELLING UNITS: Find best batch
+    let selectedBatchInfo = {
+        batch_id: item.batch_id,
+        batch_name: item.batch_name,
+        batch_switched: false
+    };
+    
+    if (item.type === 'selling_unit') {
+        selectedBatchInfo = await findBestBatchForSellingUnit(item);
+        console.log('🔍 Selected batch for selling unit:', selectedBatchInfo);
+        
+        // Update item with selected batch info
+        if (selectedBatchInfo.batch_switched) {
+            console.log(`🔄 Batch switched from ${item.batch_id} to ${selectedBatchInfo.batch_id}`);
+            
+            // Update item with new batch info for cart preparation
+            item = {
+                ...item,
+                batch_id: selectedBatchInfo.batch_id,
+                batch_name: selectedBatchInfo.batch_name,
+                batch_remaining: selectedBatchInfo.batch_remaining,
+                real_available: selectedBatchInfo.real_available,
+                can_fulfill: selectedBatchInfo.can_fulfill !== false
+            };
+        }
+    }
     
     const { item: cartItem, action, message } = batchIntelligence.prepareItemForCart(item);
     
@@ -351,7 +512,7 @@ async function handleOneTap(item) {
         batch_switch_required: cartItem.batch_switch_required,
         is_current_batch: cartItem.is_current_batch,
         thumbnail: cartItem.thumbnail,
-        _batch_switched: cartItem._batch_switched || false,
+        _batch_switched: cartItem._batch_switched || selectedBatchInfo.batch_switched,
         search_score: cartItem.search_score || 0  // Preserve search score
     };
     
@@ -360,16 +521,22 @@ async function handleOneTap(item) {
         type: enrichedItem.type,
         batch_id: enrichedItem.batch_id,
         can_fulfill: enrichedItem.can_fulfill,
+        batch_switched: enrichedItem._batch_switched,
         search_score: enrichedItem.search_score
     });
     
     // Show notification if needed
-    if (message) {
+    let finalMessage = message;
+    if (selectedBatchInfo.batch_switched) {
+        finalMessage = `Auto-switched to ${selectedBatchInfo.batch_name} batch`;
+    }
+    
+    if (finalMessage) {
         let notificationType = 'info';
-        if (action === 'switch_and_add') notificationType = 'warning';
+        if (action === 'switch_and_add' || selectedBatchInfo.batch_switched) notificationType = 'warning';
         if (action === 'add_with_warning') notificationType = 'warning';
         
-        showNotification(message, notificationType);
+        showNotification(finalMessage, notificationType);
     }
     
     // Add to cart via cart-icon.js
@@ -378,7 +545,7 @@ async function handleOneTap(item) {
         
         if (success) {
             let successMsg = `Added 1 × ${item.name}`;
-            if (action === 'switch_and_add') {
+            if (action === 'switch_and_add' || selectedBatchInfo.batch_switched) {
                 successMsg += ` (Auto-switched batch)`;
             }
             
@@ -483,7 +650,7 @@ function showNotification(message, type = 'info', duration = 3000) {
 }
 
 // ====================================================
-// SALES OVERLAY (WITH WORKING CLOSE BUTTON)
+// SALES OVERLAY (UPDATED LEGEND)
 // ====================================================
 
 function createSalesOverlay() {
@@ -508,13 +675,12 @@ function createSalesOverlay() {
     salesOverlay.innerHTML = `
         <!-- Header -->
         <div style="padding: 20px; background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255,255,255,0.2); flex-shrink:0;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; position:relative;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
                 <div>
                     <h1 style="margin:0; color:white; font-size:26px; font-weight:700;">🛍️ Smart Sales</h1>
                     <p style="margin:6px 0 0; color:rgba(255,255,255,0.8); font-size:14px;">Smart batch switching • Enhanced search</p>
                 </div>
-                <!-- CLOSE BUTTON MOVED LOWER: Added margin-top: 8px -->
-                <button id="close-sales-overlay-btn" style="background: rgba(255,255,255,0.2); border:none; color:white; width:44px; height:44px; border-radius:12px; font-size:22px; cursor:pointer; flex-shrink:0; margin-top: 8px;">×</button>
+                <button id="close-sales" style="background: rgba(255,255,255,0.2); border:none; color:white; width:44px; height:44px; border-radius:12px; font-size:22px; cursor:pointer; flex-shrink:0;">×</button>
             </div>
             
             <!-- Search Box -->
@@ -570,89 +736,31 @@ function createSalesOverlay() {
 
     document.body.appendChild(salesOverlay);
 
-    // IMPORTANT: Set up event listeners with proper timing
-    setTimeout(() => {
-        setupOverlayEventListeners();
-    }, 50);
-}
-
-// ====================================================
-// OVERLAY EVENT LISTENERS (SEPARATED FOR BETTER TIMING)
-// ====================================================
-
-function setupOverlayEventListeners() {
-    console.log('⚡ Setting up overlay event listeners');
-    
-    // Fix 1: Use event delegation for close button
-    const closeBtn = document.getElementById('close-sales-overlay-btn');
-    if (closeBtn) {
-        console.log('✅ Found close button, attaching event listener');
-        closeBtn.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('🔘 Close button clicked');
-            closeSalesOverlay();
-        };
-        
-        // Also add pointer-events check
-        closeBtn.style.pointerEvents = 'auto';
-        closeBtn.style.cursor = 'pointer';
-    } else {
-        console.log('❌ Close button not found, will retry...');
-        // Retry after a short delay
-        setTimeout(() => {
-            const retryBtn = document.getElementById('close-sales-overlay-btn');
-            if (retryBtn) {
-                console.log('✅ Found close button on retry');
-                retryBtn.onclick = closeSalesOverlay;
-                retryBtn.style.pointerEvents = 'auto';
-                retryBtn.style.cursor = 'pointer';
-            }
-        }, 100);
-    }
-    
-    // Search input event listeners
+    // Event listeners
+    document.getElementById("close-sales").onclick = closeSalesOverlay;
     const searchInput = document.getElementById("sales-search-input");
     const searchClear = document.getElementById("search-clear");
-    
-    if (searchInput) {
-        searchInput.oninput = (e) => {
-            const query = e.target.value;
-            if (searchClear) {
-                searchClear.style.display = query ? 'block' : 'none';
-            }
-            onSearchInput(query);
-        };
 
-        searchInput.onkeydown = (e) => {
-            if (e.key === 'Escape') {
-                searchInput.value = '';
-                if (searchClear) {
-                    searchClear.style.display = 'none';
-                }
-                clearSearchResults();
-            }
-        };
-    }
-    
-    if (searchClear) {
-        searchClear.onclick = () => {
-            if (searchInput) {
-                searchInput.value = '';
-                searchClear.style.display = 'none';
-                clearSearchResults();
-                searchInput.focus();
-            }
-        };
-    }
-    
-    // Add global click handler for the overlay background
-    salesOverlay.addEventListener('click', function(e) {
-        // If click is on the overlay background (not on content), close it
-        if (e.target === salesOverlay) {
-            closeSalesOverlay();
+    searchInput.oninput = (e) => {
+        const query = e.target.value;
+        searchClear.style.display = query ? 'block' : 'none';
+        onSearchInput(query);
+    };
+
+    searchInput.onkeydown = (e) => {
+        if (e.key === 'Escape') {
+            searchInput.value = '';
+            searchClear.style.display = 'none';
+            clearSearchResults();
         }
-    });
+    };
+
+    searchClear.onclick = () => {
+        searchInput.value = '';
+        searchClear.style.display = 'none';
+        clearSearchResults();
+        searchInput.focus();
+    };
 }
 
 // ====================================================
@@ -1093,7 +1201,7 @@ function renderEnhancedItemCard(item, resultsContainer, matchQuality = 'medium')
 }
 
 // ====================================================
-// OPEN / CLOSE OVERLAY (UPDATED)
+// OPEN / CLOSE OVERLAY
 // ====================================================
 
 async function openSalesOverlay() {
@@ -1128,17 +1236,10 @@ async function openSalesOverlay() {
     currentSearchResults = [];
     currentSearchQuery = "";
     
-    // Setup event listeners with a slight delay to ensure DOM is ready
     setTimeout(() => {
-        setupOverlayEventListeners();
-        
-        // Focus the search input
         const input = document.getElementById("sales-search-input");
-        if (input) {
-            input.focus();
-            console.log('✅ Search input focused');
-        }
-    }, 100);
+        if (input) input.focus();
+    }, 50);
 }
 
 function closeSalesOverlay() {
@@ -1148,9 +1249,6 @@ function closeSalesOverlay() {
         // Clear search state when closing
         currentSearchResults = [];
         currentSearchQuery = "";
-        
-        // Show a quick notification that overlay is closed
-        showNotification('Sales overlay closed', 'info', 1000);
     }
 }
 
@@ -1180,6 +1278,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.openSalesOverlay = openSalesOverlay;
     window.closeSalesOverlay = closeSalesOverlay;
     window.batchIntelligence = batchIntelligence;
+    window.findBestBatchForSellingUnit = findBestBatchForSellingUnit; // Expose for debugging
     
     // Initialize sell button
     const sellBtn = document.getElementById("sell-btn");
@@ -1197,10 +1296,6 @@ document.addEventListener("DOMContentLoaded", () => {
             e.preventDefault();
             openSalesOverlay();
         }
-        // Also allow ESC key to close overlay if it's open
-        if (e.key === 'Escape' && salesOverlay && salesOverlay.style.display === 'flex') {
-            closeSalesOverlay();
-        }
     });
     
     console.log(`
@@ -1213,8 +1308,8 @@ document.addEventListener("DOMContentLoaded", () => {
 ║ • Match quality indicators               ║
 ║ • Partial stock handling                 ║
 ║ • PERSISTENT SEARCH RESULTS              ║
-║ • Working close button (✓)               ║
-║ • Press Alt+S to open, ESC to close      ║
+║ • SELLING UNIT BATCH SWITCHING FIX       ║
+║ • Press Alt+S to open                    ║
 ╚═══════════════════════════════════════════╝
 `);
 });
@@ -1228,5 +1323,6 @@ export {
     closeSalesOverlay,
     batchIntelligence,
     handleOneTap,
-    getCurrentCartId
+    getCurrentCartId,
+    findBestBatchForSellingUnit
 };
