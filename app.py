@@ -8,13 +8,13 @@ import numpy as np
 
 from io import BytesIO
 
-import tensorflow_hub as hub
+#import tensorflow_hub as hub
 import time
 import base64
 import math
 
-from embeddings import generate_embedding
-from sklearn.metrics.pairwise import cosine_similarity
+#from embeddings import generate_embedding
+#from sklearn.metrics.pairwise import cosine_similarity
 import random 
 
 
@@ -1674,4 +1674,5 @@ if __name__ == "__main__":
     
 
     app.run(debug=True)
+
 
