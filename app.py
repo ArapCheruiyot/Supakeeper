@@ -5,16 +5,16 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 import numpy as np
-from PIL import Image
+#from PIL import Image
 from io import BytesIO
 
-import tensorflow_hub as hub
+#import tensorflow_hub as hub
 import time
 import base64
 import math
 
-from embeddings import generate_embedding
-from sklearn.metrics.pairwise import cosine_similarity
+#from embeddings import generate_embedding
+#from sklearn.metrics.pairwise import cosine_similarity
 import random 
 
 from datetime import datetime, timedelta
@@ -1765,3 +1765,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n🌐 Server starting on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
+
