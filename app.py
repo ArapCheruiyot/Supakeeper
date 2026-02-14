@@ -1725,24 +1725,53 @@ def test_selling_units():
         return jsonify({"error": str(e)}), 500
 
 # ======================================================
-# RUN SERVER WITH PROPER CACHE INITIALIZATION
+# RUN SERVER WITH BLOCKING CACHE INITIALIZATION
 # ======================================================
+
+def wait_for_cache_population(timeout_seconds=30):
+    """Block until cache is populated or timeout reached"""
+    start_time = time.time()
+    
+    print("\n" + "="*60)
+    print("🔄 WAITING FOR CACHE TO POPULATE...")
+    print("="*60)
+    
+    while time.time() - start_time < timeout_seconds:
+        try:
+            # Force a synchronous cache refresh
+            shops = refresh_full_item_cache()
+            
+            if shops and len(shops) > 0:
+                print(f"✅ Cache populated successfully with {len(shops)} shops!")
+                return True
+                
+            print(f"⏳ Cache still empty... ({int(time.time() - start_time)}s elapsed)")
+            time.sleep(2)  # Wait 2 seconds before retry
+            
+        except Exception as e:
+            print(f"⚠️  Cache refresh attempt failed: {e}")
+            time.sleep(2)
+    
+    print(f"❌ Cache population timeout after {timeout_seconds} seconds")
+    return False
 
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("🚀 SUPERKEEPER SERVER STARTING")
     print("="*60)
     
-    # Step 1: Initialize cache with retry logic
-    print("\n🔧 Initializing cache...")
-    cache_success = safe_refresh_cache_with_retry(max_retries=3)
+    # BLOCKING CACHE INITIALIZATION
+    cache_populated = wait_for_cache_population(timeout_seconds=30)
     
-    if cache_success:
-        print(f"✅ Cache initialized with {embedding_cache_full['total_shops']} shops")
-    else:
-        print("⚠️  Cache initialization failed - will try on first request")
+    if not cache_populated:
+        print("⚠️  WARNING: Cache not fully populated, but continuing...")
+        # Do one final refresh attempt
+        try:
+            refresh_full_item_cache()
+        except:
+            pass
     
-    # Step 2: Set up Firestore listeners for real-time updates
+    # Set up Firestore listeners
     print("\n[INIT] Setting up Firestore listeners...")
     try:
         db.collection_group("items").on_snapshot(on_full_item_snapshot)
@@ -1750,9 +1779,12 @@ if __name__ == "__main__":
         print("[READY] Listeners active for items and selling units")
     except Exception as e:
         print(f"[WARNING] Could not set up listeners: {e}")
-        print("[INFO] Running without real-time updates - cache will refresh on requests")
     
-    # Step 3: Show available endpoints
+    # Show cache status
+    print(f"\n📊 CACHE STATUS:")
+    print(f"  Shops loaded: {embedding_cache_full['total_shops']}")
+    print(f"  Last updated: {embedding_cache_full['last_updated']}")
+    
     print("\n📡 AVAILABLE ENDPOINTS:")
     print("  GET  /cache/status      - Check cache health")
     print("  POST /cache/refresh     - Manually refresh cache")
@@ -1761,8 +1793,7 @@ if __name__ == "__main__":
     print("  POST /complete-sale     - Complete a sale")
     print("="*60)
     
-    # Step 4: Start server
+    # Start server
     port = int(os.environ.get("PORT", 5000))
     print(f"\n🌐 Server starting on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
-
