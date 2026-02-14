@@ -1756,36 +1756,6 @@ def test_selling_units():
         return jsonify({"error": str(e)}), 500
 
 # ======================================================
-# RUN SERVER WITH BLOCKING CACHE INITIALIZATION
-# ======================================================
-
-def wait_for_cache_population(timeout_seconds=30):
-    """Block until cache is populated or timeout reached"""
-    start_time = time.time()
-    
-    print("\n" + "="*60)
-    print("🔄 WAITING FOR CACHE TO POPULATE...")
-    print("="*60)
-    
-    while time.time() - start_time < timeout_seconds:
-        try:
-            # Force a synchronous cache refresh
-            shops = refresh_full_item_cache()
-            
-            if shops and len(shops) > 0:
-                print(f"✅ Cache populated successfully with {len(shops)} shops!")
-                return True
-                
-            print(f"⏳ Cache still empty... ({int(time.time() - start_time)}s elapsed)")
-            time.sleep(2)  # Wait 2 seconds before retry
-            
-        except Exception as e:
-            print(f"⚠️  Cache refresh attempt failed: {e}")
-            time.sleep(2)
-    
-    print(f"❌ Cache population timeout after {timeout_seconds} seconds")
-    return False
-
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("🚀 SUPERKEEPER SERVER STARTING")
@@ -1828,3 +1798,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n🌐 Server starting on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
+
