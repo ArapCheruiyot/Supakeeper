@@ -64,11 +64,42 @@ def refresh_full_item_cache():
     try:
         for shop_doc in db.collection("Shops").stream():
             shop_id = shop_doc.id
-            shop_data = shop_doc.to_dict()
+            shop_data = shop_doc.to_dict() or {}
+
+            # ========== FIXED: ROBUST SHOP NAME EXTRACTION ==========
+            # Try multiple possible field names for shop name
+            shop_name = ""
+            
+            # Debug: Print available keys (will help diagnose)
+            print(f"\n🔍 Processing shop: {shop_id}")
+            print(f"  Raw shop_data keys: {list(shop_data.keys())}")
+            
+            # Check for name in various possible fields
+            if "name" in shop_data and shop_data.get("name"):
+                shop_name = shop_data["name"]
+                print(f"  ✅ Found name in 'name' field: '{shop_name}'")
+            elif "shopName" in shop_data and shop_data.get("shopName"):
+                shop_name = shop_data["shopName"]
+                print(f"  ✅ Found name in 'shopName' field: '{shop_name}'")
+            elif "displayName" in shop_data and shop_data.get("displayName"):
+                shop_name = shop_data["displayName"]
+                print(f"  ✅ Found name in 'displayName' field: '{shop_name}'")
+            elif "businessName" in shop_data and shop_data.get("businessName"):
+                shop_name = shop_data["businessName"]
+                print(f"  ✅ Found name in 'businessName' field: '{shop_name}'")
+            elif "shop_name" in shop_data and shop_data.get("shop_name"):
+                shop_name = shop_data["shop_name"]
+                print(f"  ✅ Found name in 'shop_name' field: '{shop_name}'")
+            else:
+                # Fallback - use first part of shop_id
+                shop_name = f"Shop-{shop_id[:8]}"
+                print(f"  ⚠️  No name field found, using fallback: '{shop_name}'")
+            
+            # ========== END OF FIX ==========
 
             shop_entry = {
                 "shop_id": shop_id,
-                "shop_name": shop_data.get("name", ""),
+                "shop_name": shop_name,  # Now using our robust extraction
                 "categories": []
             }
 
