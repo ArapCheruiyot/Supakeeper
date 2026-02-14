@@ -9,6 +9,7 @@
 // ✅ Emits lifecycle events (opened/base-unit-set/closed)
 // ✅ Exposes getCurrentItemContext()
 // ✅ Prompts per-selling-unit price at every stock intake (create/missing/optional update)
+// ✅ UPDATED: Added force cache refresh after item changes (solves delay issue)
 
 import { db } from "./firebase-config.js";
 import {
@@ -553,6 +554,10 @@ document.addEventListener("DOMContentLoaded", () => {
       currentItem.data.lowStockAlert = alertValue;
       currentItem.data.alertDescription = alertDescription || null;
       renderItemMeta(currentItem.data);
+      
+      // ✅ NEW: Force cache refresh after alert settings change
+      await triggerCacheRefresh();
+      
     } catch (error) {
       console.error("❌ Error saving alert:", error);
       alert("Failed to save alert settings. Please try again.");
@@ -650,6 +655,10 @@ document.addEventListener("DOMContentLoaded", () => {
       currentItem.name = updatedName;
 
       itemDetail.dataset.itemName = updatedName;
+      
+      // ✅ NEW: Force cache refresh after edits
+      await triggerCacheRefresh();
+      
     } catch (error) {
       console.error("Error updating item:", error);
       alert("Failed to save changes. Please try again.");
@@ -840,6 +849,10 @@ document.addEventListener("DOMContentLoaded", () => {
         showStatus("✅ Both images saved.");
         setTimeout(() => clearStatus(), 1200);
         renderItemMeta(currentItem?.data || data);
+        
+        // ✅ NEW: Force cache refresh after images are saved
+        await triggerCacheRefresh();
+        
         return true;
       }
       // If stream failed without cancel, we fallback below
@@ -883,6 +896,10 @@ document.addEventListener("DOMContentLoaded", () => {
     showStatus("✅ Both images saved.");
     setTimeout(() => clearStatus(), 1200);
     renderItemMeta(currentItem?.data || data);
+    
+    // ✅ NEW: Force cache refresh after images are saved
+    await triggerCacheRefresh();
+    
     return true;
   }
 
@@ -1382,6 +1399,9 @@ document.addEventListener("DOMContentLoaded", () => {
       alert(message);
 
       renderItemMeta(currentItem.data);
+      
+      // ✅ NEW: Force cache refresh after stock addition
+      await triggerCacheRefresh();
 
     } catch (error) {
       console.error("❌ Error adding stock:", error);
@@ -1748,6 +1768,9 @@ document.addEventListener("DOMContentLoaded", () => {
         sendImageForEmbedding(url, index);
         clearStatus();
         renderItemMeta(currentItem.data);
+        
+        // ✅ NEW: Force cache refresh after image retake
+        await triggerCacheRefresh();
 
         try { URL.revokeObjectURL(preview); } catch (_) {}
       };
@@ -1876,4 +1899,23 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   window.hideItemDetail = hideItemDetail;
+  
+  // =========================================================
+  // NEW: FORCE CACHE REFRESH AFTER ITEM CHANGES
+  // =========================================================
+  async function triggerCacheRefresh() {
+    try {
+      console.log('🔄 Triggering manual cache refresh after item update...');
+      const response = await fetch('/cache/refresh', { 
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await response.json();
+      console.log('✅ Cache refresh response:', data);
+    } catch (error) {
+      console.error('❌ Error refreshing cache:', error);
+    }
+  }
 });
