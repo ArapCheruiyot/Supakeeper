@@ -30,16 +30,73 @@ app = Flask(__name__)
 # ======================================================
 # FIREBASE CONFIG
 # ======================================================
-if not firebase_admin._apps:
-    firebase_key = os.environ.get("FIREBASE_KEY")
+# ======================================================
+# FIREBASE CONFIG - RENDER ENVIRONMENT VARIABLE FIX
+# ======================================================
+def init_firebase_from_env():
+    """Initialize Firebase from Render environment variable"""
     
-    if not firebase_key:
-        raise RuntimeError("FIREBASE_KEY environment variable not set")
+    print("\n🔑 Initializing Firebase from environment variable...")
     
-    cred = credentials.Certificate(json.loads(firebase_key))
-    firebase_admin.initialize_app(cred)
+    # Get the raw environment variable
+    firebase_key_raw = os.environ.get("FIREBASE_KEY")
+    
+    if not firebase_key_raw:
+        print("❌ CRITICAL: FIREBASE_KEY environment variable not set!")
+        return None
+    
+    print(f"📦 Raw key length: {len(firebase_key_raw)}")
+    print(f"📦 Raw key preview: {firebase_key_raw[:100]}...")
+    
+    try:
+        # Step 1: Remove surrounding quotes if present
+        firebase_key_trimmed = firebase_key_raw
+        if firebase_key_trimmed.startswith('"') and firebase_key_trimmed.endswith('"'):
+            firebase_key_trimmed = firebase_key_trimmed[1:-1]
+            print("✅ Removed outer quotes")
+        
+        # Step 2: Replace escaped newlines with actual newlines
+        # This is crucial for the private key
+        firebase_key_trimmed = firebase_key_trimmed.replace('\\n', '\n')
+        print("✅ Replaced escaped newlines")
+        
+        # Step 3: Parse the JSON
+        try:
+            cred_dict = json.loads(firebase_key_trimmed)
+            print("✅ Successfully parsed JSON")
+            print(f"✅ Found keys: {list(cred_dict.keys())}")
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing error at position {e.pos}")
+            # Show the problematic area
+            start = max(0, e.pos - 30)
+            end = min(len(firebase_key_trimmed), e.pos + 30)
+            print(f"❌ Around error: ...{firebase_key_trimmed[start:end]}...")
+            return None
+        
+        # Step 4: Initialize Firebase
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase initialized successfully from environment variable")
+        else:
+            print("✅ Firebase already initialized")
+        
+        return firestore.client()
+        
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        return None
 
-db = firestore.client()
+# Initialize Firebase
+print("\n🚀 Starting Firebase initialization...")
+db = init_firebase_from_env()
+
+# If Firebase failed, print warning but don't crash
+if db is None:
+    print("⚠️ WARNING: Firebase not initialized. Database operations will fail!")
+    print("⚠️ Check your FIREBASE_KEY environment variable in Render dashboard")
+else:
+    print("✅ Firebase ready to use")
 
 # ======================================================
 # FULL SHOP CACHE (STRICTLY PER SHOP) - UPDATED WITH BATCH TRACKING
@@ -1798,5 +1855,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n🌐 Server starting on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
 
